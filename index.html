@@ -3,19 +3,34 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
-<title>kaz's control room</title>
+<title>life dash.</title>
 <link rel="manifest" href="manifest.json" />
-<meta name="theme-color" content="#0B1220" />
+<meta name="theme-color" content="#000000" />
 <link rel="apple-touch-icon" href="icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:ital,wght@0,400;0,500;0,700;1,500;1,700&family=JetBrains+Mono:wght@400;500;700&family=UnifrakturMaguntia&display=swap');
   :root{
-    --bg:#0B1220; --surface:#131B2E; --border:#1E2A45; --border2:#2A3B5C;
-    --text:#E8ECF1; --muted:#5A6785; --muted2:#9FB0CC;
+    --bg:#000000; --surface:#0A0A0A; --border:#1F1F1F; --border2:#2E2E2E;
+    --text:#FFFFFF; --muted:#8A8A8A; --muted2:#C7C7C7;
     --blue:#3B82C4; --rust:#C1552C; --green:#4F9D69; --red:#C0455C;
   }
+  .brand-title { font-style: italic; font-size:24px; font-weight:700; margin:0; letter-spacing:-0.3px; }
+  .brand-sub { font-family:'UnifrakturMaguntia', cursive; font-size:16px; color:var(--muted2); letter-spacing:0.5px; margin-top:2px; }
+
+  .heatmap-grid { display:flex; gap:3px; overflow-x:auto; padding-bottom:4px; -webkit-overflow-scrolling:touch; }
+  .heatmap-col { display:flex; flex-direction:column; gap:3px; flex-shrink:0; }
+  .heatmap-cell { width:11px; height:11px; border-radius:2px; background:#141414; }
+  .heatmap-legend { display:flex; gap:4px; align-items:center; margin-top:8px; }
+  .heatmap-legend .heatmap-cell { width:9px; height:9px; }
+
+  .backup-banner { display:flex; justify-content:space-between; align-items:center; gap:10px; background:#1a1200; border:1px solid #4d3a00; color:#e0b32c; border-radius:10px; padding:10px 12px; font-size:12px; margin-bottom:14px; cursor:pointer; }
+
+  .stage-bar { display:flex; gap:6px; }
+  .stage-seg { flex:1; height:14px; border-radius:6px; background:#141414; }
+  .stage-labels { display:flex; justify-content:space-between; margin-top:4px; }
+  .stage-labels span { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:0.4px; flex:1; text-align:center; }
   * { box-sizing: border-box; }
   html, body { margin:0; padding:0; background:var(--bg); }
   body { font-family:'Space Grotesk', sans-serif; color:var(--text); }
@@ -48,7 +63,7 @@
   .field { display:flex; flex-direction:column; gap:4px; }
   .field.wide { grid-column:1 / -1; }
   .field-label { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; }
-  .input { background:var(--bg); border:1px solid #263457; border-radius:8px; color:var(--text); padding:8px 10px; font-size:13px; width:100%; }
+  .input { background:var(--surface); border:1px solid var(--border2); border-radius:8px; color:var(--text); padding:8px 10px; font-size:13px; width:100%; }
   .slider { width:100%; accent-color:var(--blue); }
 
   .btn-primary { display:inline-flex; align-items:center; gap:6px; background:var(--blue); border:none; color:var(--bg); font-weight:700; font-size:12px; padding:9px 14px; border-radius:8px; }

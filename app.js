@@ -46,12 +46,37 @@ function qualityColor(q) {
 const TABS = [
   { id: "overview", label: "overview", n: "00" },
   { id: "daily", label: "daily log", n: "01" },
-  { id: "training", label: "training", n: "02" },
-  { id: "academics", label: "academics", n: "03" },
-  { id: "freelance", label: "freelance", n: "04" },
-  { id: "goals", label: "goals", n: "05" },
-  { id: "issues", label: "issues + events", n: "06" },
+  { id: "heatmaps", label: "heatmaps", n: "02" },
+  { id: "training", label: "training", n: "03" },
+  { id: "academics", label: "academics", n: "04" },
+  { id: "freelance", label: "freelance", n: "05" },
+  { id: "goals", label: "goals", n: "06" },
+  { id: "issues", label: "issues + events", n: "07" },
 ];
+
+function daysSinceLastBackup() {
+  const ts = localStorage.getItem("kaz-dashboard-last-backup");
+  if (!ts) return null;
+  return Math.floor((Date.now() - new Date(ts).getTime()) / 86400000);
+}
+
+function buildWeeks(daysBack) {
+  const end = new Date();
+  const start = new Date(end);
+  start.setDate(end.getDate() - daysBack);
+  start.setDate(start.getDate() - start.getDay()); // rewind to sunday
+  const weeks = [];
+  let cur = new Date(start);
+  while (cur <= end) {
+    const week = [];
+    for (let d = 0; d < 7; d++) {
+      week.push(cur.toISOString().slice(0, 10));
+      cur.setDate(cur.getDate() + 1);
+    }
+    weeks.push(week);
+  }
+  return weeks;
+}
 const GOAL_TIERS = [
   { key: "daily", label: "daily" },
   { key: "weekly", label: "weekly" },
@@ -185,12 +210,15 @@ function App() {
     return { kmWeek, streak, studyWeek, incomeMonth, openIssues, upcomingEvents };
   }, [dailyLogs, training, freelance, issuesEvents]);
 
+  const [backupTick, setBackupTick] = useState(0);
+  const backupDays = useMemo(() => daysSinceLastBackup(), [backupTick]);
+
   return html`
     <div class="app">
       <div class="header">
         <div>
-          <div class="kicker">life instrument panel</div>
-          <h1 class="h1">kaz's control room</h1>
+          <h1 class="brand-title">life dash.</h1>
+          <div class="brand-sub">welcome bhuvan.</div>
         </div>
         <div class="head-stats">
           <${HeadStat} label="streak" value=${stats.streak + "d"} />
@@ -199,6 +227,13 @@ function App() {
           <${HeadStat} label="open issues" value=${stats.openIssues} warn=${stats.openIssues > 0} />
         </div>
       </div>
+
+      ${(backupDays === null || backupDays >= 7) && html`
+        <div class="backup-banner" onClick=${() => setTab("overview")}>
+          <span>${backupDays === null ? "no backups yet — export one from overview." : `last backup ${backupDays}d ago — export a fresh one.`}</span>
+          <span class="mono">→</span>
+        </div>
+      `}
 
       <div class="tab-bar">
         ${TABS.map(
@@ -211,8 +246,9 @@ function App() {
       </div>
 
       <div class="main">
-        ${tab === "overview" && html`<${Overview} stats=${stats} dailyLogs=${dailyLogs} training=${training} freelance=${freelance} />`}
+        ${tab === "overview" && html`<${Overview} stats=${stats} dailyLogs=${dailyLogs} training=${training} freelance=${freelance} onBackup=${() => setBackupTick((t) => t + 1)} />`}
         ${tab === "daily" && html`<${DailyLog} logs=${dailyLogs} setLogs=${setDailyLogs} />`}
+        ${tab === "heatmaps" && html`<${Heatmaps} dailyLogs=${dailyLogs} training=${training} />`}
         ${tab === "training" && html`<${Training} training=${training} setTraining=${setTraining} />`}
         ${tab === "academics" && html`<${Academics} logs=${dailyLogs} />`}
         ${tab === "freelance" && html`<${Freelance} freelance=${freelance} setFreelance=${setFreelance} />`}
@@ -224,7 +260,7 @@ function App() {
 }
 
 // ================= OVERVIEW =================
-function Overview({ stats, dailyLogs, training, freelance }) {
+function Overview({ stats, dailyLogs, training, freelance, onBackup }) {
   const sleepData = dailyLogs.slice().sort((a, b) => new Date(a.date) - new Date(b.date)).slice(-14);
   return html`
     <div class="grid">
@@ -254,13 +290,13 @@ function Overview({ stats, dailyLogs, training, freelance }) {
           <div class="subtle">${training.length} sessions total</div>
         </${Card}>
       </div>
-      <${BackupCard} />
+      <${BackupCard} onBackup=${onBackup} />
     </div>
   `;
 }
 
 // ================= BACKUP (export / import) =================
-function BackupCard() {
+function BackupCard({ onBackup }) {
   const [msg, setMsg] = useState("");
 
   const doExport = () => {
@@ -278,6 +314,8 @@ function BackupCard() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+    localStorage.setItem("kaz-dashboard-last-backup", new Date().toISOString());
+    if (onBackup) onBackup();
     setMsg("backup downloaded.");
   };
 
@@ -322,13 +360,19 @@ function BackupCard() {
 
 // ================= DAILY LOG =================
 function DailyLog({ logs, setLogs }) {
-  const [form, setForm] = useState({ date: today(), sleepHours: "", sleepQuality: 6, studyHours: "", mood: 3, notes: "" });
+  const [form, setForm] = useState({
+    date: today(), sleepHours: "", sleepQuality: 6, studyHours: "",
+    studyIntensity: 3, gymIntensity: 3, mood: 6, notes: "",
+  });
   const upd = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const add = () => {
     if (!form.date) return;
     setLogs((prev) => [...prev.filter((l) => l.date !== form.date), { id: uid(), ...form }]);
-    setForm({ date: today(), sleepHours: "", sleepQuality: 6, studyHours: "", mood: 3, notes: "" });
+    setForm({
+      date: today(), sleepHours: "", sleepQuality: 6, studyHours: "",
+      studyIntensity: 3, gymIntensity: 3, mood: 6, notes: "",
+    });
   };
   const sorted = logs.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -340,7 +384,9 @@ function DailyLog({ logs, setLogs }) {
           <${Field} label="sleep hours"><input type="number" step="0.5" class="input" placeholder="7.5" value=${form.sleepHours} onInput=${upd("sleepHours")} /></${Field}>
           <${Field} label="sleep quality (${form.sleepQuality}/10)"><input type="range" min="1" max="10" class="slider" value=${form.sleepQuality} onInput=${(e) => setForm({ ...form, sleepQuality: Number(e.target.value) })} /></${Field}>
           <${Field} label="study hours"><input type="number" step="0.5" class="input" placeholder="4" value=${form.studyHours} onInput=${upd("studyHours")} /></${Field}>
-          <${Field} label="mood (${form.mood}/5)"><input type="range" min="1" max="5" class="slider" value=${form.mood} onInput=${(e) => setForm({ ...form, mood: Number(e.target.value) })} /></${Field}>
+          <${Field} label="gym intensity (${form.gymIntensity}/5)"><input type="range" min="1" max="5" class="slider" value=${form.gymIntensity} onInput=${(e) => setForm({ ...form, gymIntensity: Number(e.target.value) })} /></${Field}>
+          <${Field} label="study intensity (${form.studyIntensity}/5)"><input type="range" min="1" max="5" class="slider" value=${form.studyIntensity} onInput=${(e) => setForm({ ...form, studyIntensity: Number(e.target.value) })} /></${Field}>
+          <${Field} label="mood (${form.mood}/10)"><input type="range" min="1" max="10" class="slider" value=${form.mood} onInput=${(e) => setForm({ ...form, mood: Number(e.target.value) })} /></${Field}>
           <${Field} label="notes" wide><input class="input" placeholder="anything worth remembering" value=${form.notes} onInput=${upd("notes")} /></${Field}>
         </div>
         <button class="btn-primary" onClick=${add}>+ save entry</button>
@@ -357,7 +403,9 @@ function DailyLog({ logs, setLogs }) {
                       <span class="mono">${fmtDate(l.date)}</span>
                       <span style="color:${qualityColor(l.sleepQuality)}">${l.sleepHours || "—"}h sleep</span>
                       <span class="subtle">${l.studyHours || 0}h study</span>
-                      <span class="subtle">mood ${l.mood}/5</span>
+                      <span class="subtle">gym ${l.gymIntensity || "—"}/5</span>
+                      <span class="subtle">study ${l.studyIntensity || "—"}/5</span>
+                      <span style="color:${qualityColor(l.mood)}">mood ${l.mood}/10</span>
                     </div>
                     <button class="icon-btn" onClick=${() => setLogs((p) => p.filter((x) => x.id !== l.id))}>✕</button>
                   </li>
@@ -426,6 +474,66 @@ function Training({ training, setTraining }) {
               )}
             </ul>
           `}
+      </${Card}>
+    </div>
+  `;
+}
+
+// ================= HEATMAPS =================
+function HeatmapSection({ weeks, valueMap, colorFn, unit }) {
+  return html`
+    <div class="heatmap-grid">
+      ${weeks.map(
+        (week, wi) => html`
+          <div class="heatmap-col" key=${wi}>
+            ${week.map((date) => {
+              const v = valueMap[date];
+              const bg = v ? colorFn(v) : null;
+              const label = v ? `${date}: ${v}${unit || ""}` : `${date}: no data`;
+              return html`<div class="heatmap-cell" title=${label} style=${bg ? `background:${bg}` : ""}></div>`;
+            })}
+          </div>
+        `
+      )}
+    </div>
+  `;
+}
+
+function Heatmaps({ dailyLogs, training }) {
+  const weeks = useMemo(() => buildWeeks(84), []);
+
+  const gymMap = {}, studyMap = {}, moodMap = {}, workoutMap = {};
+  dailyLogs.forEach((l) => {
+    if (l.gymIntensity) gymMap[l.date] = Number(l.gymIntensity);
+    if (l.studyIntensity) studyMap[l.date] = Number(l.studyIntensity);
+    if (l.mood) moodMap[l.date] = Number(l.mood);
+  });
+  training.forEach((t) => {
+    workoutMap[t.date] = (workoutMap[t.date] || 0) + Number(t.distanceKm || 0);
+  });
+
+  return html`
+    <div>
+      <${Card} title="gym intensity — last 12 weeks">
+        <${HeatmapSection}
+          weeks=${weeks} valueMap=${gymMap} unit="/5"
+          colorFn=${(v) => `rgba(59,130,196,${(0.25 + 0.75 * Math.min(1, v / 5)).toFixed(2)})`}
+        />
+      </${Card}>
+      <${Card} title="workouts (km/day) — last 12 weeks">
+        <${HeatmapSection}
+          weeks=${weeks} valueMap=${workoutMap} unit="km"
+          colorFn=${(v) => `rgba(193,85,44,${(0.25 + 0.75 * Math.min(1, v / 20)).toFixed(2)})`}
+        />
+      </${Card}>
+      <${Card} title="study intensity — last 12 weeks">
+        <${HeatmapSection}
+          weeks=${weeks} valueMap=${studyMap} unit="/5"
+          colorFn=${(v) => `rgba(79,157,105,${(0.25 + 0.75 * Math.min(1, v / 5)).toFixed(2)})`}
+        />
+      </${Card}>
+      <${Card} title="mood — last 12 weeks">
+        <${HeatmapSection} weeks=${weeks} valueMap=${moodMap} unit="/10" colorFn=${qualityColor} />
       </${Card}>
     </div>
   `;

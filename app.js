@@ -43,6 +43,21 @@ function qualityColor(q) {
   return `rgb(${r},${g},${b})`;
 }
 
+function parseTimeDecimal(t) {
+  if (!t) return null;
+  const [h, m] = t.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h + m / 60;
+}
+function computeSleepHours(bedTime, wakeTime) {
+  const b = parseTimeDecimal(bedTime), w = parseTimeDecimal(wakeTime);
+  if (b == null || w == null) return null;
+  let raw = w - b;
+  if (raw <= 0) raw += 24;
+  return raw;
+}
+const SLEEP_MIN_HOURS = 6;
+
 const TABS = [
   { id: "overview", label: "overview", n: "00" },
   { id: "daily", label: "daily log", n: "01" },
@@ -140,6 +155,43 @@ function BarChartSVG({ data, valueKey, colorFn, height = 160 }) {
   `;
 }
 
+function SleepStockChart({ data, height = 190 }) {
+  if (!data.length) return null;
+  const w = 300, h = height, padL = 28, padR = 10, padT = 12, padB = 24;
+  const vals = data.map((d) => Number(d.sleepHours) || 0);
+  const max = Math.max(10, ...vals) + 1;
+  const scaleY = (v) => padT + (h - padT - padB) * (1 - v / max);
+  const stepX = (w - padL - padR) / Math.max(1, data.length - 1);
+  const scaleX = (i) => padL + i * stepX;
+  const thresholdY = scaleY(SLEEP_MIN_HOURS);
+
+  const points = data.map((d, i) => ({
+    x: scaleX(i), y: scaleY(Number(d.sleepHours) || 0), v: Number(d.sleepHours) || 0, date: d.date,
+  }));
+
+  return html`
+    <svg viewBox="0 0 ${w} ${h}" style="width:100%; height:${h}px;">
+      <line x1=${padL} y1=${thresholdY} x2=${w - padR} y2=${thresholdY} stroke="#8A8A8A" stroke-width="1" stroke-dasharray="4 4" />
+      <text x=${padL + 4} y=${thresholdY - 5}>${SLEEP_MIN_HOURS}h min</text>
+
+      ${points.slice(1).map((p, i) => {
+        const prev = points[i];
+        const avg = (p.v + prev.v) / 2;
+        const color = avg >= SLEEP_MIN_HOURS ? "#4F9D69" : "#C0455C";
+        return html`<line key=${i} x1=${prev.x} y1=${prev.y} x2=${p.x} y2=${p.y} stroke=${color} stroke-width="2" />`;
+      })}
+      ${points.map(
+        (p, i) => html`<circle key=${i} cx=${p.x} cy=${p.y} r="3.5" fill=${p.v >= SLEEP_MIN_HOURS ? "#4F9D69" : "#C0455C"} />`
+      )}
+      ${points.map((p, i) =>
+        i % Math.ceil(points.length / 6 || 1) === 0
+          ? html`<text key=${"t" + i} x=${p.x} y=${h - 4} text-anchor="middle">${fmtDate(p.date)}</text>`
+          : null
+      )}
+    </svg>
+  `;
+}
+
 // ---------- shared bits ----------
 function Card({ title, children }) {
   return html`
@@ -200,7 +252,7 @@ function App() {
     })();
 
     const studyWeek = dailyLogs.filter((l) => new Date(l.date) >= weekAgo).reduce((s, l) => s + Number(l.studyHours || 0), 0);
-    const incomeMonth = freelance.filter((f) => new Date(f.date) >= monthAgo).reduce((s, f) => s + Number(f.amount || 0), 0);
+    const incomeMonth = freelance.filter((f) => f.status === "paid" && new Date(f.date) >= monthAgo).reduce((s, f) => s + Number(f.amount || 0), 0);
     const openIssues = issuesEvents.issues.filter((i) => !i.resolved).length;
     const upcomingEvents = [...issuesEvents.events]
       .filter((e) => new Date(e.date) >= new Date(now.toDateString()))
@@ -266,8 +318,8 @@ function Overview({ stats, dailyLogs, training, freelance, onBackup }) {
     <div class="grid">
       <${Card} title="sleep — last 14 nights">
         ${sleepData.length === 0
-          ? html`<${Empty} text="log a night's sleep in the daily log tab to see this fill in." />`
-          : html`<${LineChartSVG} data=${sleepData} valueKey="sleepHours" colorKey="sleepQuality" />`}
+          ? html`<${Empty} text="log wake/bed times in the daily log tab to see this fill in." />`
+          : html`<${SleepStockChart} data=${sleepData} />`}
       </${Card}>
       <${Card} title="upcoming">
         ${stats.upcomingEvents.length === 0
@@ -281,9 +333,9 @@ function Overview({ stats, dailyLogs, training, freelance, onBackup }) {
           `}
       </${Card}>
       <div class="row">
-        <${Card} title="freelance — this month">
+        <${Card} title="freelance paid — this month">
           <div class="big-num">₹${stats.incomeMonth.toFixed(0)}</div>
-          <div class="subtle">${freelance.length} entries total</div>
+          <div class="subtle">${freelance.length} projects total</div>
         </${Card}>
         <${Card} title="training volume">
           <div class="big-num">${stats.kmWeek.toFixed(1)} <span class="subtle">km / wk</span></div>
@@ -361,17 +413,32 @@ function BackupCard({ onBackup }) {
 // ================= DAILY LOG =================
 function DailyLog({ logs, setLogs }) {
   const [form, setForm] = useState({
-    date: today(), sleepHours: "", sleepQuality: 6, studyHours: "",
-    studyIntensity: 3, gymIntensity: 3, mood: 6, notes: "",
+    date: today(), bedTime: "", wakeTime: "", sleepQuality: 6, studyHours: "",
+    studyIntensity: 3, gymDone: false, gymIntensity: 3, mood: 6, notes: "",
   });
   const upd = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
+  const yesterdayStr = (dateStr) => {
+    const d = new Date(dateStr);
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  };
+
+  const previewSleepHours = useMemo(() => {
+    const yLog = logs.find((l) => l.date === yesterdayStr(form.date));
+    if (yLog && yLog.bedTime && form.wakeTime) return computeSleepHours(yLog.bedTime, form.wakeTime);
+    return null;
+  }, [logs, form.date, form.wakeTime]);
+
   const add = () => {
     if (!form.date) return;
-    setLogs((prev) => [...prev.filter((l) => l.date !== form.date), { id: uid(), ...form }]);
+    const yLog = logs.find((l) => l.date === yesterdayStr(form.date));
+    const sleepHours = yLog && yLog.bedTime && form.wakeTime ? computeSleepHours(yLog.bedTime, form.wakeTime) : "";
+    const entry = { id: uid(), ...form, sleepHours, gymIntensity: form.gymDone ? form.gymIntensity : null };
+    setLogs((prev) => [...prev.filter((l) => l.date !== form.date), entry]);
     setForm({
-      date: today(), sleepHours: "", sleepQuality: 6, studyHours: "",
-      studyIntensity: 3, gymIntensity: 3, mood: 6, notes: "",
+      date: today(), bedTime: "", wakeTime: "", sleepQuality: 6, studyHours: "",
+      studyIntensity: 3, gymDone: false, gymIntensity: 3, mood: 6, notes: "",
     });
   };
   const sorted = logs.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -381,12 +448,31 @@ function DailyLog({ logs, setLogs }) {
       <${Card} title="add today's entry">
         <div class="form-grid">
           <${Field} label="date"><input type="date" class="input" value=${form.date} onInput=${upd("date")} /></${Field}>
-          <${Field} label="sleep hours"><input type="number" step="0.5" class="input" placeholder="7.5" value=${form.sleepHours} onInput=${upd("sleepHours")} /></${Field}>
+          <div class="field"></div>
+          <${Field} label="bed time (tonight)"><input type="time" class="input" value=${form.bedTime} onInput=${upd("bedTime")} /></${Field}>
+          <${Field} label="wake time (this morning)"><input type="time" class="input" value=${form.wakeTime} onInput=${upd("wakeTime")} /></${Field}>
+          <div class="field wide subtle" style="margin-top:-6px;">
+            ${previewSleepHours != null
+              ? html`auto-calculated: <span style="color:${previewSleepHours >= SLEEP_MIN_HOURS ? "#4F9D69" : "#C0455C"}; font-weight:700;">${previewSleepHours.toFixed(1)}h</span> (yesterday's bed time → today's wake time)`
+              : "log yesterday's bed time + today's wake time to auto-calculate sleep hours."}
+          </div>
           <${Field} label="sleep quality (${form.sleepQuality}/10)"><input type="range" min="1" max="10" class="slider" value=${form.sleepQuality} onInput=${(e) => setForm({ ...form, sleepQuality: Number(e.target.value) })} /></${Field}>
           <${Field} label="study hours"><input type="number" step="0.5" class="input" placeholder="4" value=${form.studyHours} onInput=${upd("studyHours")} /></${Field}>
-          <${Field} label="gym intensity (${form.gymIntensity}/5)"><input type="range" min="1" max="5" class="slider" value=${form.gymIntensity} onInput=${(e) => setForm({ ...form, gymIntensity: Number(e.target.value) })} /></${Field}>
           <${Field} label="study intensity (${form.studyIntensity}/5)"><input type="range" min="1" max="5" class="slider" value=${form.studyIntensity} onInput=${(e) => setForm({ ...form, studyIntensity: Number(e.target.value) })} /></${Field}>
           <${Field} label="mood (${form.mood}/10)"><input type="range" min="1" max="10" class="slider" value=${form.mood} onInput=${(e) => setForm({ ...form, mood: Number(e.target.value) })} /></${Field}>
+
+          <div class="field wide">
+            <div style="display:flex; align-items:center; gap:8px; cursor:pointer;" onClick=${() => setForm({ ...form, gymDone: !form.gymDone })}>
+              <span class="checkbox ${form.gymDone ? "done" : ""}">${form.gymDone ? "✓" : ""}</span>
+              <span>went to gym today</span>
+            </div>
+          </div>
+          ${form.gymDone && html`
+            <${Field} label="gym intensity (${form.gymIntensity}/5)" wide>
+              <input type="range" min="1" max="5" class="slider" value=${form.gymIntensity} onInput=${(e) => setForm({ ...form, gymIntensity: Number(e.target.value) })} />
+            </${Field}>
+          `}
+
           <${Field} label="notes" wide><input class="input" placeholder="anything worth remembering" value=${form.notes} onInput=${upd("notes")} /></${Field}>
         </div>
         <button class="btn-primary" onClick=${add}>+ save entry</button>
@@ -401,10 +487,10 @@ function DailyLog({ logs, setLogs }) {
                   <li class="list-item-row" key=${l.id}>
                     <div class="row-left">
                       <span class="mono">${fmtDate(l.date)}</span>
-                      <span style="color:${qualityColor(l.sleepQuality)}">${l.sleepHours || "—"}h sleep</span>
+                      <span style="color:${l.sleepHours ? (l.sleepHours >= SLEEP_MIN_HOURS ? "#4F9D69" : "#C0455C") : "var(--muted)"}">${l.sleepHours ? Number(l.sleepHours).toFixed(1) : "—"}h sleep</span>
                       <span class="subtle">${l.studyHours || 0}h study</span>
-                      <span class="subtle">gym ${l.gymIntensity || "—"}/5</span>
                       <span class="subtle">study ${l.studyIntensity || "—"}/5</span>
+                      <span class="subtle">${l.gymIntensity ? `gym ${l.gymIntensity}/5` : "rest day"}</span>
                       <span style="color:${qualityColor(l.mood)}">mood ${l.mood}/10</span>
                     </div>
                     <button class="icon-btn" onClick=${() => setLogs((p) => p.filter((x) => x.id !== l.id))}>✕</button>
@@ -561,69 +647,106 @@ function Academics({ logs }) {
   `;
 }
 
+const STAGES = [
+  { key: "start", label: "start", color: "#3B82C4" },
+  { key: "ongoing", label: "ongoing", color: "#C1552C" },
+  { key: "delivered", label: "delivered", color: "#8B5CF6" },
+  { key: "paid", label: "paid", color: "#4F9D69" },
+];
+
+function StageBar({ status }) {
+  const currentIdx = Math.max(0, STAGES.findIndex((s) => s.key === status));
+  return html`
+    <div>
+      <div class="stage-bar">
+        ${STAGES.map((s, i) => {
+          const filled = i <= currentIdx;
+          const style = filled
+            ? `background:${s.color}; box-shadow:0 0 10px ${s.color}99;`
+            : "";
+          return html`<div class="stage-seg" key=${s.key} style=${style}></div>`;
+        })}
+      </div>
+      <div class="stage-labels">
+        ${STAGES.map(
+          (s, i) => html`<span key=${s.key} style=${i === currentIdx ? `color:${s.color}; font-weight:700;` : ""}>${s.label}</span>`
+        )}
+      </div>
+    </div>
+  `;
+}
+
 // ================= FREELANCE =================
 function Freelance({ freelance, setFreelance }) {
-  const [form, setForm] = useState({ date: today(), project: "", client: "", amount: "", status: "pending" });
+  const [form, setForm] = useState({ date: today(), project: "", client: "", amount: "" });
   const upd = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const add = () => {
     if (!form.project) return;
-    setFreelance((prev) => [...prev, { id: uid(), ...form }]);
-    setForm({ date: today(), project: "", client: "", amount: "", status: "pending" });
+    setFreelance((prev) => [...prev, { id: uid(), ...form, status: "start" }]);
+    setForm({ date: today(), project: "", client: "", amount: "" });
   };
-  const chartData = freelance.slice().sort((a, b) => new Date(a.date) - new Date(b.date))
-    .map((f) => ({ date: fmtDate(f.date), amount: f.amount }));
+
+  const setStatus = (id, status) =>
+    setFreelance((prev) => prev.map((f) => (f.id === id ? { ...f, status } : f)));
+  const removeProject = (id) => setFreelance((prev) => prev.filter((f) => f.id !== id));
+
   const sorted = freelance.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
   const totalPaid = freelance.filter((f) => f.status === "paid").reduce((s, f) => s + Number(f.amount || 0), 0);
-  const totalPending = freelance.filter((f) => f.status === "pending").reduce((s, f) => s + Number(f.amount || 0), 0);
+  const totalInProgress = freelance.filter((f) => f.status !== "paid").reduce((s, f) => s + Number(f.amount || 0), 0);
+  const chartData = freelance.map((f) => ({ date: f.project.slice(0, 8), amount: f.amount, status: f.status }));
 
   return html`
     <div>
-      <${Card} title="log a project / payment">
+      <${Card} title="log a new project">
         <div class="form-grid">
-          <${Field} label="date"><input type="date" class="input" value=${form.date} onInput=${upd("date")} /></${Field}>
+          <${Field} label="date started"><input type="date" class="input" value=${form.date} onInput=${upd("date")} /></${Field}>
           <${Field} label="project"><input class="input" placeholder="photo upscale batch" value=${form.project} onInput=${upd("project")} /></${Field}>
           <${Field} label="client"><input class="input" placeholder="client name" value=${form.client} onInput=${upd("client")} /></${Field}>
           <${Field} label="amount (₹)"><input type="number" class="input" placeholder="2500" value=${form.amount} onInput=${upd("amount")} /></${Field}>
-          <${Field} label="status">
-            <select class="input" value=${form.status} onInput=${upd("status")}>
-              <option value="pending">pending</option>
-              <option value="paid">paid</option>
-            </select>
-          </${Field}>
         </div>
-        <button class="btn-primary" onClick=${add}>+ save entry</button>
+        <button class="btn-primary" onClick=${add}>+ add project</button>
       </${Card}>
+
       <div class="row">
         <${Card} title="paid"><div class="big-num">₹${totalPaid.toFixed(0)}</div></${Card}>
-        <${Card} title="pending"><div class="big-num" style="color:#C1552C">₹${totalPending.toFixed(0)}</div></${Card}>
+        <${Card} title="in progress"><div class="big-num" style="color:#C1552C">₹${totalInProgress.toFixed(0)}</div></${Card}>
       </div>
-      <${Card} title="income over time">
+
+      <${Card} title="value by project">
         ${chartData.length === 0
-          ? html`<${Empty} text="log a project to see this fill in." />`
-          : html`<${BarChartSVG} data=${chartData} valueKey="amount" colorFn=${() => "#4F9D69"} />`}
+          ? html`<${Empty} text="add a project to see this fill in." />`
+          : html`<${BarChartSVG} data=${chartData} valueKey="amount" colorFn=${(d) => STAGES.find((s) => s.key === d.status).color} />`}
       </${Card}>
-      <${Card} title="project history">
-        ${sorted.length === 0
-          ? html`<${Empty} text="no projects logged yet." />`
-          : html`
-            <ul class="list">
-              ${sorted.map(
-                (f) => html`
-                  <li class="list-item-row" key=${f.id}>
-                    <div class="row-left">
-                      <span class="mono">${fmtDate(f.date)}</span>
-                      <span>${f.project}</span>
-                      <span class="subtle">${f.client}</span>
-                      <span style="color:${f.status === "paid" ? "#4F9D69" : "#C1552C"}">₹${f.amount} · ${f.status}</span>
-                    </div>
-                    <button class="icon-btn" onClick=${() => setFreelance((p) => p.filter((x) => x.id !== f.id))}>✕</button>
-                  </li>
-                `
-              )}
-            </ul>
-          `}
-      </${Card}>
+
+      ${sorted.length === 0
+        ? html`<${Card} title="projects"><${Empty} text="no projects logged yet." /></${Card}>`
+        : sorted.map(
+            (f) => html`
+              <${Card} title=${f.project} key=${f.id}>
+                <div class="row-left" style="margin-bottom:12px; justify-content:space-between; width:100%;">
+                  <div class="row-left">
+                    <span class="mono">${fmtDate(f.date)}</span>
+                    <span class="subtle">${f.client}</span>
+                    <span>₹${f.amount}</span>
+                  </div>
+                  <button class="icon-btn" onClick=${() => removeProject(f.id)}>✕</button>
+                </div>
+                <${StageBar} status=${f.status} />
+                <div style="display:flex; gap:6px; margin-top:12px; flex-wrap:wrap;">
+                  ${STAGES.map(
+                    (s) => html`
+                      <button
+                        key=${s.key}
+                        onClick=${() => setStatus(f.id, s.key)}
+                        style="font-size:11px; padding:6px 10px; border-radius:6px; border:1px solid ${f.status === s.key ? s.color : "var(--border2)"}; background:${f.status === s.key ? s.color + "22" : "transparent"}; color:${f.status === s.key ? s.color : "var(--muted)"};"
+                      >mark ${s.label}</button>
+                    `
+                  )}
+                </div>
+              </${Card}>
+            `
+          )}
     </div>
   `;
 }
